@@ -1,0 +1,381 @@
+-- ModuleScript: DialogueModule
+-- Local onde você deve colocar este arquivo: por exemplo, ReplicatedStorage/DialogueModule
+-- Uso geral:
+--   local DialogueModule = require(path.to.DialogueModule)
+--   local controller = DialogueModule:Call("Tutorial")
+--   controller.Keep = game.StarterGui.ScreenGui.TextLabelTutorial  -- objeto TextLabel onde o diálogo será exibido
+--   controller.Animation = { Entrance = "TypingEffect", Exit = "TypingEffect" }
+--   controller:Play()
+--   -- Também é possível apenas obter a tabela de diálogos sem exibição:
+--   -- local tutorialSequence = DialogueModule:Get("Tutorial")
+
+local DialogueModule = {}
+
+--------------------------------
+-- Definição das estruturas de diálogo
+--------------------------------
+
+--[[ 
+	A estrutura 'Dialogos' contém as diferentes sequências de diálogo que podem ser tocadas.
+	Cada chave (por exemplo, "Tutorial", "Conversa") referencia uma lista de entradas de diálogo.
+	Cada entrada possui:
+		- Dialogo (string): o texto a ser exibido.
+		- Time (number): por quantos segundos o texto ficará totalmente visível antes de começar a saída.
+		- Delay (number): quantos segundos esperar após a animação de saída para passar ao próximo diálogo.
+--]]
+local Dialogos = {
+	Tutorial = {
+		{ Dialogo = "Deus criou o mundo em 7 dias", Time = 4, Delay = 3 },
+		{ Dialogo = "Para você criar o mundo, você necessita juntar pontos de 'fé'", Time = 4, Delay = 3 },
+		{ Dialogo = "Cada segundo, você ganha 1 ponto de fé", Time = 2, Delay = 1 },
+	},
+	Conversa = {
+		{ Dialogo = "Sendo deus, seja gentil com suas criações", Time = 4, Delay = 3 },
+	}
+}
+
+--------------------------------
+-- Tabela de animações suportadas
+--------------------------------
+
+-- As animações definidas abaixo descrevem como o texto deve entrar ("Entrance")
+-- e sair ("Exit") de cena. 
+-- Você pode especificar uma destas strings para controller.Animation.Entrance/Exit:
+--   "TypingEffect"
+--   "ReverseTypingEffect"
+--   "FadingEffect"
+--   "MessEffect"
+-- Caso não seja especificado, o módulo usará padrões (nesse exemplo, sem animação).
+
+--------------------------------
+-- Funções internas de animação
+--------------------------------
+
+-- Helpers de animação recebem:
+--   label      -> TextLabel onde o texto será exibido/ocultado.
+--   fullText   -> string completa do diálogo.
+--   entryType  -> nome da animação de entrada (string).
+--   exitType   -> nome da animação de saída (string).
+--   onComplete -> função de callback opcional quando terminar a saída.
+
+-- Nota: as funções usam "spawn" para não travar o thread principal.
+-- Em produção, você pode usar "coroutine.wrap" ou "RunService.Heartbeat" conforme preferir.
+
+local AnimationFunctions = {}
+
+-- Animação de digitação normal + apagamento da frente para trás
+function AnimationFunctions:TypingEffect(label, fullText, entryDuration, exitDuration, onEntryComplete, onExitComplete)
+	-- entryDuration e exitDuration são ignorados aqui (usamos velocidade fixa), mas poderiam ser parametrizados.
+	-- Digita letra por letra:
+	spawn(function()
+		label.Visible = true
+		label.Text = ""
+		-- Velocidade de digitação em segundos por caractere (ajuste conforme necessidade)
+		local charDelay = 0.05
+		for i = 1, #fullText do
+			label.Text = string.sub(fullText, 1, i)
+			wait(charDelay)
+		end
+		if onEntryComplete then
+			onEntryComplete()
+		end
+	end)
+end
+
+-- Apaga letra por letra, da frente para trás
+function AnimationFunctions:TypingEffectExit(label, fullText, onComplete)
+	spawn(function()
+		-- Mesma velocidade do digitar
+		local charDelay = 0.05
+		for i = 1, #fullText do
+			-- Substring começando no caractere (i + 1) até o fim
+			label.Text = string.sub(fullText, i + 1)
+			wait(charDelay)
+		end
+		if onComplete then
+			onComplete()
+		end
+	end)
+end
+
+-- Digita letra por letra, depois apaga da traseira para a frente
+function AnimationFunctions:ReverseTypingEffect(label, fullText, onEntryComplete, onExitComplete)
+	-- Entry: igual ao TypingEffect (digita letra a letra)
+	spawn(function()
+		label.Visible = true
+		label.Text = ""
+		local charDelay = 0.05
+		for i = 1, #fullText do
+			label.Text = string.sub(fullText, 1, i)
+			wait(charDelay)
+		end
+		if onEntryComplete then
+			onEntryComplete()
+		end
+	end)
+end
+
+function AnimationFunctions:ReverseTypingEffectExit(label, fullText, onComplete)
+	spawn(function()
+		local charDelay = 0.05
+		-- Apaga da traseira (i = #fullText, #fullText-1, ..., 1)
+		for i = #fullText, 1, -1 do
+			label.Text = string.sub(fullText, 1, i - 1)
+			wait(charDelay)
+		end
+		if onComplete then
+			onComplete()
+		end
+	end)
+end
+
+-- Animação de fade-in e fade-out ajustando TextTransparency
+function AnimationFunctions:FadingEffect(label, fullText, onEntryComplete, onExitComplete)
+	spawn(function()
+		label.Visible = true
+		label.Text = fullText
+		-- Inicia com texto totalmente transparente (1) e reduz até 0 (visível)
+		local steps = 20
+		for i = steps, 0, -1 do
+			label.TextTransparency = i / steps
+			wait(0.05)
+		end
+		if onEntryComplete then
+			onEntryComplete()
+		end
+	end)
+end
+
+function AnimationFunctions:FadingEffectExit(label, fullText, onComplete)
+	spawn(function()
+		-- Aumenta transparência de 0 até 1
+		local steps = 20
+		for i = 0, steps do
+			label.TextTransparency = i / steps
+			wait(0.05)
+		end
+		if onComplete then
+			onComplete()
+		end
+	end)
+end
+
+-- Efeito de bagunça (MessEffect): entra gerando caracteres aleatórios que se transformam no texto correto
+function AnimationFunctions:MessEffect(label, fullText, onEntryComplete, onExitComplete)
+	spawn(function()
+		label.Visible = true
+		-- Gera uma string de tamanho igual com caracteres aleatórios
+		local length = #fullText
+		local randomChars = {}
+		local charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%%¨&*()-_=+[]{};:,.<>/?"
+		for i = 1, length do
+			table.insert(randomChars, string.sub(charset, math.random(1, #charset), math.random(1, #charset)))
+		end
+		label.Text = table.concat(randomChars)
+
+		-- Gradualmente substitui cada caractere bagunçado pelo correto
+		local charDelay = 0.05
+		for i = 1, length do
+			randomChars[i] = string.sub(fullText, i, i)
+			label.Text = table.concat(randomChars)
+			wait(charDelay)
+		end
+
+		if onEntryComplete then
+			onEntryComplete()
+		end
+	end)
+end
+
+-- Para exit, inverte: troca caracteres por bagunça e depois some
+function AnimationFunctions:MessEffectExit(label, fullText, onComplete)
+	spawn(function()
+		local length = #fullText
+		local charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%%¨&*()-_=+[]{};:,.<>/?"
+		local garbled = {}
+		for i = 1, length do
+			-- inicialmente é todo texto correto
+			garbled[i] = string.sub(fullText, i, i)
+		end
+
+		-- Substitui do primeiro ao último por caractere aleatório
+		local charDelay = 0.05
+		for i = 1, length do
+			garbled[i] = string.sub(charset, math.random(1, #charset), math.random(1, #charset))
+			label.Text = table.concat(garbled)
+			wait(charDelay)
+		end
+
+		-- Depois de bagunçar tudo, faz fade-out simples
+		for i = 1, 10 do
+			label.TextTransparency = i / 10
+			wait(0.05)
+		end
+
+		if onComplete then
+			onComplete()
+		end
+	end)
+end
+
+--------------------------------
+-- Função privada que executa a sequência de exibição de um único diálogo
+--------------------------------
+-- Parâmetros:
+--   controller -> tabela contendo:
+--       .Keep        (instance)  -> TextLabel onde será exibido
+--       .Animation   (table)     -> { Entrance = <string>, Exit = <string> }
+--   dialogueEntry -> tabela { Dialogo = <string>, Time = <number>, Delay = <number> }
+--   onFinished    -> callback opcional para quando terminar esse diálogo e delay
+--------------------------------
+local function playSingleDialogue(controller, dialogueEntry, onFinished)
+	assert(controller.Keep and controller.Keep:IsA("TextLabel"),
+		"[DialogueModule] controller.Keep precisa ser um TextLabel válido.")
+
+	local textLabel     = controller.Keep
+	local fullText      = dialogueEntry.Dialogo
+	local visibleTime   = dialogueEntry.Time
+	local postDelay     = dialogueEntry.Delay
+	local anims         = controller.Animation or {}
+	local entranceStyle = anims.Entrance or ""
+	local exitStyle     = anims.Exit or ""
+
+	-- Callback após entrada concluída; aguarda 'visibleTime' segundos antes de iniciar saída
+	local function afterEntry()
+		-- Mantém o texto fixo pelo tempo especificado
+		delay(visibleTime, function()
+			-- Executa a animação de saída
+			if exitStyle == "TypingEffect" then
+				AnimationFunctions:TypingEffectExit(textLabel, fullText, function()
+					-- Após saída, aguarda 'postDelay' segundos e dispara onFinished
+					delay(postDelay, function()
+						textLabel.Visible = false
+						if onFinished then onFinished() end
+					end)
+				end)
+			elseif exitStyle == "ReverseTypingEffect" then
+				AnimationFunctions:ReverseTypingEffectExit(textLabel, fullText, function()
+					delay(postDelay, function()
+						textLabel.Visible = false
+						if onFinished then onFinished() end
+					end)
+				end)
+			elseif exitStyle == "FadingEffect" then
+				AnimationFunctions:FadingEffectExit(textLabel, fullText, function()
+					delay(postDelay, function()
+						textLabel.Visible = false
+						if onFinished then onFinished() end
+					end)
+				end)
+			elseif exitStyle == "MessEffect" then
+				AnimationFunctions:MessEffectExit(textLabel, fullText, function()
+					delay(postDelay, function()
+						textLabel.Visible = false
+						if onFinished then onFinished() end
+					end)
+				end)
+			else
+				-- Sem animação de saída: simplesmente esconde após 'visibleTime + postDelay'
+				delay(postDelay, function()
+					textLabel.Visible = false
+					if onFinished then onFinished() end
+				end)
+			end
+		end)
+	end
+
+	-- Executa animação de entrada conforme especificado
+	if entranceStyle == "TypingEffect" then
+		AnimationFunctions:TypingEffect(textLabel, fullText, nil, nil, afterEntry)
+	elseif entranceStyle == "ReverseTypingEffect" then
+		AnimationFunctions:ReverseTypingEffect(textLabel, fullText, afterEntry)
+	elseif entranceStyle == "FadingEffect" then
+		AnimationFunctions:FadingEffect(textLabel, fullText, afterEntry)
+	elseif entranceStyle == "MessEffect" then
+		AnimationFunctions:MessEffect(textLabel, fullText, afterEntry)
+	else
+		-- Sem animação de entrada: exibe o texto imediatamente e dispara callback após 'visibleTime'
+		textLabel.Visible = true
+		textLabel.Text = fullText
+		delay(visibleTime, function()
+			textLabel.Visible = false
+			-- Aguarda postDelay e chama onFinished
+			delay(postDelay, function()
+				if onFinished then onFinished() end
+			end)
+		end)
+	end
+end
+
+--------------------------------
+-- Controller: objeto retornado por DialogueModule:Call()
+-- Contém:
+--   .Key        (string)   -> nome da sequência de diálogo
+--   .Sequence   (table)    -> referencia direta à lista de entradas em Dialogos[Key]
+--   .Keep       (instance) -> TextLabel onde o diálogo será exibido (deve ser configurado antes de Play)
+--   .Animation  (table)    -> { Entrance = <string>, Exit = <string> } (pode ser configurado antes de Play)
+--   :Play() -> Inicia a reprodução sequencial de todos os diálogos em Sequence
+--------------------------------
+
+function DialogueModule:Call(key)
+	assert(type(key) == "string", "[DialogueModule] :Call espera uma string como chave.")
+	assert(Dialogos[key], "[DialogueModule] Não existe sequência de diálogo com a chave: " .. key)
+
+	-- Controller object
+	local controller = {}
+	controller.Key       = key
+	controller.Sequence  = Dialogos[key]
+	controller.Keep      = nil  -- Deve ser um TextLabel (assign pelo usuário antes de Play)
+	controller.Animation = {
+		Entrance = "",  -- nome da animação de entrada; default vazio = sem animação
+		Exit     = ""   -- nome da animação de saída; default vazio
+	}
+
+	-- Função para começar a tocar a sequência a partir do índice 1
+	function controller:Play()
+		assert(self.Keep and self.Keep:IsA("TextLabel"),
+			"[DialogueModule] controller.Keep precisa ser configurado como TextLabel antes de chamar :Play()")
+		-- Índice inicial
+		local index = 1
+		-- Função recursiva para tocar cada diálogo
+		local function playNext()
+			local entry = self.Sequence[index]
+			if not entry then
+				-- Terminou todos os diálogos; retorna
+				return
+			end
+			-- Chama playSingleDialogue; quando terminar, incrementa índice e chama novamente
+			playSingleDialogue(self, entry, function()
+				index = index + 1
+				playNext()
+			end)
+		end
+		-- Inicia a primeira
+		playNext()
+	end
+
+	-- Retorna o controller para o usuário configurar e chamar :Play()
+	return controller
+end
+
+--------------------------------
+-- Função para obter a tabela bruta de diálogos (sem exibição)
+-- Uso: local seq = DialogueModule:Get("Tutorial")
+-- seq é uma lista de {Dialogo, Time, Delay}
+--------------------------------
+function DialogueModule:Get(key)
+	assert(type(key) == "string", "[DialogueModule] :Get espera uma string como chave.")
+	assert(Dialogos[key], "[DialogueModule] Não existe sequência de diálogo com a chave: " .. key)
+	-- Retorna uma cópia superficial (opcionalmente, pode retornar diretamente)
+	local copy = {}
+	for i, v in ipairs(Dialogos[key]) do
+		copy[i] = {
+			Dialogo = v.Dialogo,
+			Time    = v.Time,
+			Delay   = v.Delay
+		}
+	end
+	return copy
+end
+
+return DialogueModule
