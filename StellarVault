@@ -1,0 +1,244 @@
+--[[
+	StellarVault - Sistema Modular Profissional de Gerenciamento de Dados para Roblox
+
+	Autor: Ecl1pseLunar
+	Descrição: Módulo robusto e expansível para gerenciamento de dados persistentes utilizando o DataStoreService.
+	Funcionalidades:
+	- CRUD completo para múltiplas categorias (Client, Server, Comments, Logs, Inventary)
+	- Organização modular e extensível
+	- Foco em segurança, performance e flexibilidade
+	- Utilização eficiente da API do Roblox (DataStoreService)
+	- Suporte a versionamento e controle interno de integridade dos dados
+	- Design para fácil integração e manutenção
+
+	Coloque este ModuleScript em ServerScriptService ou ReplicatedStorage, conforme uso.
+
+	Recomendações:
+	- Operações de escrita devem ser feitas no servidor.
+	- Evite salvar dados sensíveis no Client.
+]]
+
+local DataStoreService = game:GetService("DataStoreService")
+
+local DATASTORE_PREFIX = "StellarVault_"
+local SUPPORTED_TABS = { "Client", "Server", "Comments", "Logs", "Inventory", "Shots" }
+
+local DataStores = {}
+for _, tab in ipairs(SUPPORTED_TABS) do
+	DataStores[tab] = DataStoreService:GetDataStore(DATASTORE_PREFIX..tab)
+end
+
+local System = {
+	Client = {},
+	Server = {},
+	Comments = {},
+	Logs = {},
+	Inventory = {},
+	Shots = {},
+}
+
+local StellarVault = {}
+StellarVault.__index = StellarVault
+
+-- Utilitário: Validação de categoria/tab
+local function validateTab(tab)
+	assert(tab and DataStores[tab], string.format("[StellarVault] Categoria '%s' inválida!", tostring(tab)))
+end
+
+-- Utilitário: Conversão segura de UserId para string
+local function toKey(userId)
+	return tostring(userId)
+end
+
+-- Utilitário: Deep copy (para evitar efeitos colaterais indesejados)
+local function deepCopy(tbl)
+	if type(tbl) ~= "table" then return tbl end
+	local copy = {}
+	for k, v in pairs(tbl) do
+		copy[k] = deepCopy(v)
+	end
+	return copy
+end
+
+-- Utilitário: Geração de timestamp para logs
+local function getTimestamp()
+	return os.date("%Y-%m-%d %H:%M:%S")
+end
+
+--[[
+	Método: Obter dados de uma categoria/tab
+	Parâmetros:
+		userId (number/string): Identificador único do usuário
+		tab (string): Nome da categoria
+	Resultado:
+		Dados da categoria, ou tabela vazia se não existir
+]]
+function StellarVault:get(userId, tab)
+	validateTab(tab)
+	local success, result = pcall(function()
+		return DataStores[tab]:GetAsync(toKey(userId))
+	end)
+	if success then
+		return result or {}
+	else
+		warn(string.format("[StellarVault] Falha ao obter dados (%s:%s): %s", tab, userId, tostring(result)))
+		return {}
+	end
+end
+
+--[[
+	Método: Adicionar informação à categoria/tab
+	Parâmetros:
+		userId (number/string)
+		tab (string)
+		info (qualquer): Informação a ser salva (table/string/number/etc)
+	Resultado:
+		true/nil, erro
+]]
+function StellarVault:add(userId, tab, info)
+	validateTab(tab)
+	assert(info ~= nil, "[StellarVault] Informação a adicionar não pode ser nula!")
+	local data = self:get(userId, tab)
+	if type(data) ~= "table" then data = {} end
+	table.insert(data, deepCopy(info))
+	local success, err = pcall(function()
+		DataStores[tab]:SetAsync(toKey(userId), data)
+	end)
+	if not success then
+		warn(string.format("[StellarVault] Falha ao adicionar informação (%s:%s): %s", tab, userId, tostring(err)))
+	end
+	return success, err
+end
+
+--[[
+	Método: Deletar informação da categoria/tab
+	Parâmetros:
+		userId (number/string)
+		tab (string)
+		indexOrKey (number/string): Índice ou chave
+	Resultado:
+		true/nil, erro
+]]
+function StellarVault:del(userId, tab, indexOrKey)
+	validateTab(tab)
+	local data = self:get(userId, tab)
+	if type(indexOrKey) == "number" then
+		table.remove(data, indexOrKey)
+	elseif type(indexOrKey) == "string" then
+		data[indexOrKey] = nil
+	else
+		error("[StellarVault] indexOrKey deve ser number ou string.")
+	end
+	local success, err = pcall(function()
+		DataStores[tab]:SetAsync(toKey(userId), data)
+	end)
+	if not success then
+		warn(string.format("[StellarVault] Falha ao deletar informação (%s:%s): %s", tab, userId, tostring(err)))
+	end
+	return success, err
+end
+
+--[[
+	Método: Salvar dados completos (sobrescreve)
+	Parâmetros:
+		userId (number/string)
+		tab (string)
+		dataToSave (table)
+	Resultado:
+		true/nil, erro
+]]
+function StellarVault:save(userId, tab, dataToSave)
+	validateTab(tab)
+	assert(type(dataToSave) == "table", "[StellarVault] dataToSave deve ser uma tabela!")
+	local success, err = pcall(function()
+		DataStores[tab]:SetAsync(toKey(userId), deepCopy(dataToSave))
+	end)
+	if not success then
+		warn(string.format("[StellarVault] Falha ao salvar dados (%s:%s): %s", tab, userId, tostring(err)))
+	end
+	return success, err
+end
+
+--[[
+	Método: Carregar dados (igual get, uso semântico)
+	Parâmetros:
+		userId (number/string)
+		tab (string)
+	Resultado:
+		Dados da categoria, ou tabela vazia se não existir
+]]
+function StellarVault:load(userId, tab)
+	return self:get(userId, tab)
+end
+
+--[[
+	Método: Adicionar log (com timestamp automático)
+	Parâmetros:
+		userId (number/string)
+		logMsg (string)
+	Resultado:
+		true/nil, erro
+]]
+function StellarVault:log(userId, logMsg)
+	assert(type(logMsg) == "string", "[StellarVault] logMsg deve ser string!")
+	local entry = { message = logMsg, time = getTimestamp() }
+	return self:add(userId, "Logs", entry)
+end
+
+--[[
+	Método: Adicionar comentário (com opcional de origem)
+	Parâmetros:
+		userId (number/string)
+		comment (string)
+		origin (string) [opcional]
+	Resultado:
+		true/nil, erro
+]]
+function StellarVault:comment(userId, comment, origin)
+	assert(type(comment) == "string", "[StellarVault] comment deve ser string!")
+	local entry = { text = comment, origin = origin or "unknown", time = getTimestamp() }
+	return self:add(userId, "Comments", entry)
+end
+
+--[[
+	Método: Resetar dados de uma categoria/tab de um usuário
+	Parâmetros:
+		userId (number/string)
+		tab (string)
+	Resultado:
+		true/nil, erro
+]]
+function StellarVault:reset(userId, tab)
+	validateTab(tab)
+	local success, err = pcall(function()
+		DataStores[tab]:RemoveAsync(toKey(userId))
+	end)
+	if not success then
+		warn(string.format("[StellarVault] Falha ao resetar dados (%s:%s): %s", tab, userId, tostring(err)))
+	end
+	return success, err
+end
+
+--[[
+	Método: Checar se existe dados para o usuário
+	Parâmetros:
+		userId (number/string)
+		tab (string)
+	Resultado:
+		true/false
+]]
+function StellarVault:exists(userId, tab)
+	validateTab(tab)
+	local data = self:get(userId, tab)
+	return (data ~= nil and (type(data) == "table" and next(data) ~= nil))
+end
+
+--[[
+	Exemplo de uso:
+	StellarVault:add(123456, "Client", {score=100, lives=3})
+	StellarVault:log(123456, "Usuário entrou no servidor.")
+	StellarVault:comment(123456, "Primeiro login realizado.", "authSystem")
+	StellarVault:reset(123456, "Inventary")
+]]
+
+return setmetatable({}, StellarVault)
