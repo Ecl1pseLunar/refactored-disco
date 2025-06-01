@@ -21,7 +21,7 @@
 local DataStoreService = game:GetService("DataStoreService")
 
 local DATASTORE_PREFIX = "StellarVault_"
-local SUPPORTED_TABS = { "Client", "Server", "Comments", "Logs", "Inventory", "Shots" }
+local SUPPORTED_TABS = { "Client", "Server", "Comments", "Logs", "Inventory", "Equipped" }
 
 local DataStores = {}
 for _, tab in ipairs(SUPPORTED_TABS) do
@@ -34,7 +34,7 @@ local System = {
 	Comments = {},
 	Logs = {},
 	Inventory = {},
-	Shots = {},
+	Equipped = {},
 }
 
 local StellarVault = {}
